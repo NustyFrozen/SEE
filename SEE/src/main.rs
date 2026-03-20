@@ -1,6 +1,7 @@
 mod tui;
 mod tui_input;
 use std::collections::HashSet;
+use std::slice::SliceIndex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -12,7 +13,9 @@ use crossterm::terminal::enable_raw_mode;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Offset, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Masked, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Tabs};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs,
+};
 use ratatui::{Frame, symbols};
 use serde::ser;
 use tokio::{io, process::Command};
@@ -94,8 +97,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Char(c) if c.is_ascii_digit() => {
                                 let mut pos = c.to_digit(10).unwrap() - 1;
                                 let mut buffers = get_buffers().lock().unwrap();
+
                                 if (pos >= 0 && (pos as usize) < buffers.len()) {
                                     SELECTED_BUFFER.store(pos as usize, Ordering::SeqCst);
+                                    for buf in buffers.iter_mut() {
+                                        buf.inputstate = InputMode::Unfocused;
+                                    }
+                                    if let Some(buf) =
+                                        buffers.get_mut(SELECTED_BUFFER.load(Ordering::SeqCst))
+                                    {
+                                        if (buf.inputstate == InputMode::Unfocused) {
+                                            buf.inputstate = InputMode::SelectLog;
+                                        }
+                                    }
+
+                                    *INPUT_OWNER.lock().unwrap() = InputOwner::BUFFERS;
                                 }
                             }
                             _ => {}
@@ -136,9 +152,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let Some(matching_buffer) =
                                                 buffers.iter().position(|b| b.unit == services[i])
                                             {
+                                                if let Some(tui) = buffers.get_mut(matching_buffer)
+                                                {
+                                                    tui.dispose();
+                                                }
                                                 buffers.remove(matching_buffer);
+                                                SELECTED_BUFFER
+                                                    .store(buffers.len() - 1, Ordering::SeqCst);
                                             } else {
                                                 buffers.push(SEETui::new(services[i].clone()));
+
+                                                SELECTED_BUFFER
+                                                    .store(buffers.len() - 1, Ordering::SeqCst);
                                             }
                                         }
                                     }
@@ -240,7 +265,7 @@ fn render(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Header text
-            Constraint::Min(3),    // Main Body (List + Table)
+            Constraint::Min(1),    // Main Body (List + Table)
             Constraint::Length(2), // Application metadata footer
         ])
         .split(frame.size());
@@ -249,8 +274,8 @@ fn render(
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(20), // Services List
-            Constraint::Percentage(80), // Logs Table (and its headers)
+            Constraint::Ratio(1, 4), // Services List
+            Constraint::Ratio(3, 4), // Logs Table (and its headers)
         ])
         .split(main_chunks[1]);
     // Split the right side of the body for Headers vs Table
@@ -262,17 +287,17 @@ fn render(
         ])
         .split(body_chunks[0]);
 
+    render_info_paragraph(frame, main_chunks[2], nextkey);
+    render_buffer_tabs(frame, body_chunks[1], nextkey);
+    if (filter_input.render_input(servicechunk[1], frame, nextkey)) {
+        list_state.select(Some(0 as usize));
+    }
     render_services(
         frame,
         &mut filter_input.input.to_string(),
         servicechunk[0],
         list_state,
     );
-    render_info_paragraph(frame, main_chunks[2], nextkey);
-    render_buffer_tabs(frame, body_chunks[1], nextkey);
-    if (filter_input.render_input(servicechunk[1], frame, nextkey)) {
-        list_state.select(Some(0 as usize));
-    }
 }
 fn render_info_paragraph(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent>) {
     let short_line = "Slice, layer, and bake the vegetables. ";
@@ -291,29 +316,40 @@ fn render_info_paragraph(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent
     frame.render_widget(parag[1].clone().right_aligned(), area + Offset::new(-1, 0));
 }
 fn render_buffer_tabs(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent>) {
+    let tab_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Top row for Tabs
+            Constraint::Min(0),    // Bottom area for Log widget
+        ])
+        .split(area);
+
     let mut buffers = get_buffers().lock().unwrap();
+
+    let tab_titles: Vec<String> = buffers
+        .iter()
+        .map(|b| format!("📝{}", b.unit.clone()))
+        .collect();
+
+    let tabs = Tabs::new(tab_titles)
+        .highlight_style(Style::new().fg(SEETui::FOCUSED_COLOR).bold())
+        .select(SELECTED_BUFFER.load(Ordering::SeqCst))
+        .divider("|")
+        .padding(" ", " ");
+
+    frame.render_widget(tabs, tab_chunks[0]);
+
     if let Some(buffer) = buffers.get_mut(SELECTED_BUFFER.load(Ordering::SeqCst)) {
-        let buffer: &mut SEETui = buffer;
         let mut owner = INPUT_OWNER.lock().unwrap();
-        if !buffer.run_widget(area + Offset::new(1, 0), frame, nextkey)
-            && *owner == InputOwner::BUFFERS
-        {
-            if (buffer.oldinputstate == InputMode::InputFrom) {
+
+        // 2. Render logs strictly in the BOTTOM chunk (No Offset needed!)
+        if !buffer.run_widget(tab_chunks[1], frame, nextkey) && *owner == InputOwner::BUFFERS {
+            if buffer.oldinputstate == InputMode::InputFrom {
                 *owner = InputOwner::SERVICESearch;
             } else {
                 *owner = InputOwner::SERVICEList;
             }
         }
-        let tab_titles: Vec<String> = buffers
-            .iter()
-            .map(|b| format!("📝{}", b.unit.clone()))
-            .collect();
-        let tabs = Tabs::new(tab_titles)
-            .highlight_style(Style::default().fg(SEETui::FOCUSED_COLOR).bold())
-            .select(SELECTED_BUFFER.load(Ordering::SeqCst))
-            .divider("|")
-            .padding(" ", " ");
-        frame.render_widget(tabs, area);
     }
 }
 fn render_services(frame: &mut Frame, filter: &mut String, area: Rect, list_state: &mut ListState) {

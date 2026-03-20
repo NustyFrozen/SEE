@@ -102,7 +102,10 @@ impl TuiInput {
                         self.enter_char(to_insert);
                         valuechanged = true;
                     }
-                    KeyCode::Backspace => self.delete_char(),
+                    KeyCode::Backspace => {
+                        valuechanged = true;
+                        self.delete_char();
+                    }
                     KeyCode::Left => self.move_cursor_left(),
                     KeyCode::Right => self.move_cursor_right(),
                     _ => {}
