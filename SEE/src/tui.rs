@@ -79,15 +79,21 @@ impl SEETui {
         } else {
             None
         };
+        let mut pid = String::new();
         while let Ok(Some(entry)) = reader.next_entry() {
-            let wallclock = match entry.get_wallclock_time() {
-                Some(ts) => ts.timestamp_us,
-                None => continue,
-            };
             if stop_flag.load(Ordering::SeqCst) {
                 return items;
             }
-            // Manual Time Window Filtering
+            if let Some(newpid) = entry.get_field("_PID") {
+                if newpid != pid {
+                    items.push(format_styled_line(&entry, -1, newpid));
+                    pid = newpid.to_string();
+                }
+            }
+            let wallclock = match entry.get_wallclock_time() {
+                Some(ts) => ts.timestamp_us,
+                None => continue,
+            }; // Manual Time Window Filtering
             if wallclock < from_us {
                 continue;
             }
@@ -329,8 +335,8 @@ impl SEETui {
         let list = List::new(self.log_data.clone())
             .block(cool_block)
             .highlight_symbol(">>")
+            .bg(Color::Rgb(20, 20, 25))
             .highlight_style(Style::new().white().bg(SEETui::FOCUSED_COLOR));
-        frame.render_widget(Clear, area);
         frame.render_stateful_widget(list, area, &mut self.lstate);
     }
 }
@@ -341,12 +347,23 @@ fn format_styled_line(
     message: &str,
 ) -> ListItem<'static> {
     let dt = Local.timestamp_nanos(wallclock * 1000);
-    let ts_str = dt.format("%Y-%m-%dT%H:%M:%S%.3f").to_string();
-    let offset_str = dt.format("%:z").to_string();
+    let date_str = dt.format("%Y-%m-%dT%H:%M").to_string();
+    let time_str = dt.format("%H:%M:%S%.3f").to_string();
     let offset_str = dt.format("%:z").to_string(); // 2. Metadata (Unit, PID, and Priority)
     let unit_raw = entry.get_field("_SYSTEMD_UNIT").unwrap_or("");
-    let pid = entry.get_field("_PID").unwrap_or_else(|| "0".into());
     let priority = entry.get_field("PRIORITY").unwrap_or("6");
+    if (wallclock == -1) {
+        let line = Line::from(vec![
+            // Insert the Emoji at the very beginning
+            // Timestamp in Purple
+            Span::styled(
+                format!("Started New Instance ➝ {}({})", unit_raw, message),
+                Style::default().fg(Color::Gray),
+            ),
+        ]);
+
+        return ListItem::new(line.centered());
+    }
     let display_message = if let Some(start_idx) = message.find("msg=\"") {
         let content_start = start_idx + 5; // Skip past the 'msg="'
         if let Some(end_offset) = message[content_start..].find('"') {
@@ -397,29 +414,20 @@ fn format_styled_line(
         ),
     };
 
-    // Middle Truncation Logic (e.g., "service-name" -> "ser..ame")
-    let unit_disp = if unit_raw.len() > 10 {
-        format!("{}..{} ", &unit_raw[..4], &unit_raw[unit_raw.len() - 4..])
-    } else {
-        format!("{: <11}", unit_raw)
-    };
-
     // 3. Construct the Styled Line using Ratatui Spans
     let line = Line::from(vec![
         // Insert the Emoji at the very beginning
         Span::styled(format!("{} ", emoji), emoji_style),
         // Timestamp in Purple
-        Span::styled(ts_str, Style::default().fg(Color::Indexed(170))),
+        Span::styled(date_str, Style::default().fg(Color::Indexed(170))),
+        Span::styled(
+            format!("T{}", time_str),
+            Style::default().fg(Color::Indexed(180)),
+        ),
         // Offset in Blue/Cyan
         Span::styled(offset_str, Style::default().fg(Color::Indexed(39))),
         // Spacing
         Span::raw("  "),
-        // Unit and [PID] in Green
-        Span::styled(
-            format!("{}[{}]", unit_disp, pid),
-            Style::default().fg(Color::Indexed(76)),
-        ),
-        // Spacing
         Span::raw("  "),
         // The Message styled dynamically based on the priority level
         Span::styled(

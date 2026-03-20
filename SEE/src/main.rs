@@ -260,6 +260,7 @@ fn render(
 ) {
     // --- STEP 1: Main Vertical Stack ---
     let root_block = Block::default().style(Style::default().bg(Color::Rgb(20, 20, 25))); // Deep dark blue background
+
     frame.render_widget(root_block, frame.size());
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -312,6 +313,7 @@ fn render_info_paragraph(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent
             " ALT + 1..9".italic().gray().slow_blink(),
         ]),
     ];
+
     frame.render_widget(parag[0].clone().left_aligned(), area + Offset::new(1, 0));
     frame.render_widget(parag[1].clone().right_aligned(), area + Offset::new(-1, 0));
 }
@@ -336,7 +338,6 @@ fn render_buffer_tabs(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent>) 
         .select(SELECTED_BUFFER.load(Ordering::SeqCst))
         .divider("|")
         .padding(" ", " ");
-
     frame.render_widget(tabs, tab_chunks[0]);
 
     if let Some(buffer) = buffers.get_mut(SELECTED_BUFFER.load(Ordering::SeqCst)) {
