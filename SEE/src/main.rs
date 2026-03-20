@@ -6,12 +6,13 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use color_eyre::Result;
+use color_eyre::owo_colors::colors::White;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::enable_raw_mode;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Offset, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Tabs};
+use ratatui::text::{Line, Masked, Span};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Tabs};
 use ratatui::{Frame, symbols};
 use serde::ser;
 use tokio::{io, process::Command};
@@ -99,7 +100,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             _ => {}
                         }
-                        {}
                     } else {
                         let mut owner = INPUT_OWNER.lock().unwrap();
                         match *owner {
@@ -122,6 +122,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             buffer.refocus();
                                         }
                                     }
+                                    (KeyCode::Enter, false) => {
+                                        let index: Option<usize> = service_state.selected();
+
+                                        if let Some(mut i) = index {
+                                            let services = SERVICES_POST_PROCESSING
+                                                .get()
+                                                .unwrap()
+                                                .lock()
+                                                .unwrap();
+
+                                            let mut buffers = get_buffers().lock().unwrap();
+                                            if let Some(matching_buffer) =
+                                                buffers.iter().position(|b| b.unit == services[i])
+                                            {
+                                                buffers.remove(matching_buffer);
+                                            } else {
+                                                buffers.push(SEETui::new(services[i].clone()));
+                                            }
+                                        }
+                                    }
+
                                     (_, _) => {}
                                 }
 
@@ -219,8 +240,8 @@ fn render(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Header text
-            Constraint::Min(4),    // Main Body (List + Table)
-            Constraint::Length(1), // Application metadata footer
+            Constraint::Min(3),    // Main Body (List + Table)
+            Constraint::Length(2), // Application metadata footer
         ])
         .split(frame.size());
 
@@ -247,8 +268,27 @@ fn render(
         servicechunk[0],
         list_state,
     );
+    render_info_paragraph(frame, main_chunks[2], nextkey);
     render_buffer_tabs(frame, body_chunks[1], nextkey);
-    filter_input.render_input(servicechunk[1], frame, nextkey);
+    if (filter_input.render_input(servicechunk[1], frame, nextkey)) {
+        list_state.select(Some(0 as usize));
+    }
+}
+fn render_info_paragraph(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent>) {
+    let short_line = "Slice, layer, and bake the vegetables. ";
+    let long_line = short_line.repeat((area.width as usize) / short_line.len() + 2);
+    let parag = vec![
+        Line::from_iter([
+            "Move between Widgets".bold().light_yellow(),
+            " Cntrl + h/← | j/↑ | k/⬇| l/→".italic().gray().slow_blink(),
+        ]),
+        Line::from_iter([
+            "Switch Between open Logs".bold().light_cyan(),
+            " ALT + 1..9".italic().gray().slow_blink(),
+        ]),
+    ];
+    frame.render_widget(parag[0].clone().left_aligned(), area + Offset::new(1, 0));
+    frame.render_widget(parag[1].clone().right_aligned(), area + Offset::new(-1, 0));
 }
 fn render_buffer_tabs(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent>) {
     let mut buffers = get_buffers().lock().unwrap();
@@ -264,7 +304,10 @@ fn render_buffer_tabs(frame: &mut Frame, area: Rect, nextkey: Option<KeyEvent>) 
                 *owner = InputOwner::SERVICEList;
             }
         }
-        let tab_titles: Vec<String> = buffers.iter().map(|b| b.unit.clone()).collect();
+        let tab_titles: Vec<String> = buffers
+            .iter()
+            .map(|b| format!("📝{}", b.unit.clone()))
+            .collect();
         let tabs = Tabs::new(tab_titles)
             .highlight_style(Style::default().fg(SEETui::FOCUSED_COLOR).bold())
             .select(SELECTED_BUFFER.load(Ordering::SeqCst))
