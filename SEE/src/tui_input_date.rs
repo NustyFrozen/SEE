@@ -1,3 +1,4 @@
+use chrono::{Local, NaiveDateTime, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     Frame,
@@ -8,18 +9,16 @@ use ratatui::{
 };
 
 use crate::tui::SEETui;
-pub(crate) struct TuiInput {
+pub(crate) struct TuiInputDate {
     title: String,
-    prefix: String,
     pub input: String,
     character_index: usize,
     pub focused: bool,
 }
-impl TuiInput {
-    pub fn new(title: String, prefix: String) -> Self {
+impl TuiInputDate {
+    pub fn new(title: String) -> Self {
         Self {
             title: title,
-            prefix: prefix,
             input: String::new(),
             character_index: 0,
             focused: false,
@@ -38,8 +37,74 @@ impl TuiInput {
 
     fn enter_char(&mut self, new_char: char) {
         let index = self.byte_index();
+
+        // 1. Total length is now 19 characters for yyyy
+        if index >= 19 {
+            return;
+        }
+
+        // 2. Updated Validation Logic
+        let is_valid = match index {
+            // MM (Month) 00-12
+            0 => "01".contains(new_char),
+            1 => {
+                let first = self.input.chars().nth(0).unwrap_or('0');
+                if first == '1' {
+                    "012".contains(new_char)
+                } else {
+                    true
+                }
+            }
+            // DD (Day) 00-31
+            3 => "0123".contains(new_char),
+            4 => {
+                let first = self.input.chars().nth(3).unwrap_or('0');
+                if first == '3' {
+                    "01".contains(new_char)
+                } else {
+                    true
+                }
+            }
+            // YYYY - Allow any digits for 6, 7, 8, 9
+            6..=9 => true,
+            // HH (Hour) - Now starts at index 11
+            11 => "012".contains(new_char),
+            12 => {
+                let first = self.input.chars().nth(11).unwrap_or('0');
+                if first == '2' {
+                    "0123".contains(new_char)
+                } else {
+                    true
+                }
+            }
+            // MM/SS (Minutes/Seconds) - Now at 14 and 17
+            14 | 17 => "012345".contains(new_char),
+            _ => true,
+        };
+
+        if !is_valid {
+            return;
+        }
+
         self.input.insert(index, new_char);
         self.move_cursor_right();
+
+        // 4. Corrected Auto-Insert Positions
+        let next_index = self.byte_index();
+        match next_index {
+            2 | 5 => self.auto_insert('/'),
+            10 => self.auto_insert(' '),      // Space after YYYY
+            13 | 16 => self.auto_insert(':'), // Time separators
+            _ => {}
+        }
+    }
+    fn auto_insert(&mut self, separator: char) {
+        let i = self.byte_index();
+        // Only insert if it's not already there (prevents double separators)
+        if self.input.chars().nth(i) != Some(separator) {
+            self.input.insert(i, separator);
+            self.move_cursor_right();
+        }
     }
 
     /// Returns the byte index based on the character position.
@@ -91,30 +156,60 @@ impl TuiInput {
 
     pub fn render_input(&mut self, area: Rect, frame: &mut Frame, keye: Option<KeyEvent>) -> bool {
         self.render(area, frame);
-        let mut valuechanged = false;
+        let mut key_pressed = false;
         if let Some(key) = keye
             && self.focused
         {
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     KeyCode::Enter => self.submit_message(),
-                    KeyCode::Char(to_insert) => {
+                    KeyCode::Char(to_insert) if to_insert.is_ascii_digit() => {
                         self.enter_char(to_insert);
-                        valuechanged = true;
+                        key_pressed = true;
                     }
                     KeyCode::Backspace => {
-                        valuechanged = true;
                         self.delete_char();
+
+                        return self.input.is_empty();
                     }
-                    KeyCode::Left => self.move_cursor_left(),
-                    KeyCode::Right => self.move_cursor_right(),
                     _ => {}
                 }
             }
         }
-        valuechanged
-    }
 
+        if key_pressed {
+            let ts = Self::parse_human_time(&self.input);
+            return ts != 0;
+        }
+        false
+    }
+    pub fn parse_human_time(s: &str) -> i64 {
+        // 1. Instant exit for wrong length
+        if s.len() != 19 {
+            return 0;
+        }
+
+        // 2. Fast byte-check for separators (much faster than regex or full parse)
+        // mm/dd/yyyy hh:mm:ss
+        // 0123456789012345678
+        let bytes = s.as_bytes();
+        if bytes[2] != b'/'
+            || bytes[5] != b'/'
+            || bytes[10] != b' '
+            || bytes[13] != b':'
+            || bytes[16] != b':'
+        {
+            return 0;
+        }
+
+        // 3. Only now do the heavy lifting
+        let fmt = "%m/%d/%Y %H:%M:%S";
+        NaiveDateTime::parse_from_str(s, fmt)
+            .ok()
+            .and_then(|naive| Local.from_local_datetime(&naive).single())
+            .map(|dt| dt.timestamp_micros())
+            .unwrap_or(0)
+    }
     fn render(&self, input_area: Rect, frame: &mut Frame) {
         let cool_block = Block::default()
             .borders(Borders::ALL)
@@ -133,7 +228,7 @@ impl TuiInput {
             .title_alignment(Alignment::Left);
         let is_empty = str::is_empty(self.input.as_str());
         let input = Paragraph::new(if is_empty {
-            self.prefix.as_str()
+            "mm/dd/yyyy hh:mm:ss"
         } else {
             self.input.as_str()
         })
