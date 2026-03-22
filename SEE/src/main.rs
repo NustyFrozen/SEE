@@ -337,7 +337,7 @@ fn render(
     );
 }
 fn render_info_paragraph(frame: &mut Frame, footer_area: Rect, header_area: Rect) {
-    let mut owner = INPUT_OWNER.lock().unwrap();
+    let owner = INPUT_OWNER.lock().unwrap();
     let mut buffers = get_buffers().lock().unwrap();
     let cursor = if *owner == InputOwner::BUFFERS {
         Line::from_iter([
