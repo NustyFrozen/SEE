@@ -7,9 +7,9 @@
 
 #### Usage
 run
-`SEE`
+`seetui`
 or
-`SEE -u service1 service2....`
+`seetui -u service1 service2....`
 #### Keybinds
 - Ctrl + q Exit application
 - Alt + [1-9]: Switch between open logs (buffers)
