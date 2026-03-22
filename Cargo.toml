@@ -1,9 +1,9 @@
 [package]
-name = "SEE"
-version = "0.1.0"
+name = "seetui"
+version = "0.1.3"
 edition = "2024"
 description = "TUI based tool to gather & lookup logs from services (systemd)"
-license = "GNU"
+license = "AGPL-3.0"
 readme = "README.md"
 repository = "https://github.com/NustyFrozen/SEE"
 

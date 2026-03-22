@@ -535,14 +535,10 @@ impl SEETui {
         let unit_raw = entry.get_field("_SYSTEMD_UNIT").unwrap_or("");
         let priority = entry.get_field("PRIORITY").unwrap_or("6");
         if wallclock == -1 {
-            let line = Line::from(vec![
-                // Insert the Emoji at the very beginning
-                // Timestamp in Purple
-                Span::styled(
-                    format!("Started New Instance ➝ {}({})", unit_raw, message),
-                    Style::default().fg(Color::Gray),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                format!("Started New Instance ➝ {}({})", unit_raw, message),
+                Style::default().fg(Color::Gray),
+            )]);
 
             return ListItem::new(line.centered());
         }
@@ -563,37 +559,37 @@ impl SEETui {
         } else {
             message
         };
-        let (emoji, msg_style) = match priority {
+        let (level, msg_style) = match priority {
             "0" | "1" | "2" | "3" => (
                 // Emerg, Alert, Crit, Err
-                "❌",
+                "ERR",
                 Style::default().fg(Color::Red), // Error = Red
             ),
             "4" => (
                 // Warning
-                "⚠️",
+                "WARN",
                 Style::default().fg(Color::Rgb(255, 165, 0)), // Warning = Orange
             ),
             "5" | "6" => (
                 // Notice, Info
-                "ℹ️",
+                "INFO",
                 Style::default().fg(Color::Cyan), // Info = Cyan
             ),
             "7" => (
                 // Debug
-                "🐞",
+                "DEBUG",
                 Style::default().fg(Color::Yellow), // Debug = Yellow
             ),
             _ => (
                 // Unknown
-                "❓",
+                "UKNOWN",
                 Style::default().fg(Color::White), // Unknown = White
             ),
         };
 
         // 3. Construct the Styled Line using Ratatui Spans
         let line = Line::from(vec![
-            Span::styled(format!("{}", emoji), msg_style),
+            Span::styled(format!("[{}] ", level), msg_style),
             Span::styled(date_str, Style::default().fg(Color::Indexed(170))),
             Span::styled(format!(" {}", time_str), Style::default().fg(Color::White)),
             // Offset in Blue/Cyan
