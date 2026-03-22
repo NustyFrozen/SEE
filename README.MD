@@ -2,7 +2,7 @@
 #### Linux Services Log Viewer (like journalctl) TUI with VI alike key movements that allows you to open multiple instances of service logs (like nvim buffers) with custom filtering
 ![Demo of SEE Viewer](media/demo.gif)
 ### Installation
-`cargo install SEE`
+`cargo install seetui`
 
 
 #### Usage
