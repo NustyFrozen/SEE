@@ -1,6 +1,6 @@
 [package]
 name = "seetui"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "TUI based tool to gather & lookup logs from services (systemd)"
 license = "AGPL-3.0"
