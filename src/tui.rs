@@ -1,7 +1,6 @@
+use crate::reader_instance::{self};
 use crate::{tui_input, tui_input_date};
-use chrono::{Local, NaiveDateTime, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use futures::task::noop_waker_ref;
 use journald::JournalEntry;
 use journald::reader::{JournalReader, JournalReaderConfig};
 use ratatui::Frame;
@@ -10,14 +9,8 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, LineGauge, List, ListItem, ListState, Padding};
 use ratatui::widgets::{Clear, Paragraph};
-use regex::Regex;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll};
-use tokio::task::JoinHandle;
+use std::sync::atomic::Ordering;
 
-use tokio::{self};
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum InputMode {
     InputFilter,
@@ -27,21 +20,21 @@ pub enum InputMode {
     Unfocused,
     DetailedEntry,
 }
+
 pub(crate) struct SEETui {
     clipboard: Option<arboard::Clipboard>,
     pub unit: String,
+    reader_instance: reader_instance::ReaderInstance,
     filter: tui_input::TuiInput,
     from: tui_input_date::TuiInputDate,
     to: tui_input_date::TuiInputDate,
     pub inputstate: InputMode,
     pub oldinputstate: InputMode,
-    cursor_map: Vec<String>,
-    log_data: Vec<ListItem<'static>>,
-    fetch_task: Option<JoinHandle<(Vec<String>, Vec<ListItem<'static>>)>>,
-    pub is_cancelled: Arc<AtomicBool>,
     lstate: ListState,
     tstate: ListState,
     temp_cursor_log: JournalEntry,
+    cursor_map: Vec<String>,
+    log_data: Vec<ListItem<'static>>,
 }
 impl SEETui {
     pub const FOCUSED_COLOR: Color = Color::Rgb(121, 88, 221);
@@ -50,13 +43,9 @@ impl SEETui {
         self.reformwidgets();
     }
     pub fn dispose(&mut self) {
-        self.is_cancelled.store(true, Ordering::SeqCst);
-
-        if let Some(task) = self.fetch_task.take() {
-            task.abort();
-        }
-
-        self.is_cancelled.store(false, Ordering::SeqCst);
+        self.reader_instance
+            .is_cancelled
+            .store(true, Ordering::SeqCst);
     }
     fn select_log(&mut self) {
         if let Some(idx) = self.lstate.selected() {
@@ -80,102 +69,33 @@ impl SEETui {
             }
         }
     }
-    fn fetch_log_data(
-        unit: String,
-        filter: String,
-        from: String,
-        to: String,
-        stop_flag: Arc<AtomicBool>,
-    ) -> (Vec<String>, Vec<ListItem<'static>>) {
-        let mut reader = match JournalReader::open(&JournalReaderConfig::default()) {
-            Ok(r) => r,
-            Err(_) => return (vec![], vec![]),
-        };
-        reader
-            .add_filter(format!("_SYSTEMD_UNIT={}", unit).as_str())
-            .ok();
-        let from_us = SEETui::parse_human_time(&from);
-        let to_us = if to.is_empty() {
-            i64::MAX
-        } else {
-            SEETui::parse_human_time(&to)
-        };
 
-        let mut cursor = Vec::new();
-        let mut items = Vec::new();
-        let re = if !filter.is_empty() {
-            Regex::new(&filter).ok()
-        } else {
-            None
-        };
-        let mut pid = String::new();
-        while let Ok(Some(entry)) = reader.next_entry() {
-            if stop_flag.load(Ordering::SeqCst) {
-                return (cursor, items);
-            }
-
-            let wallclock = match entry.get_wallclock_time() {
-                Some(ts) => ts.timestamp_us,
-                None => continue,
-            };
-            if wallclock < from_us {
-                continue;
-            }
-            if wallclock > to_us {
-                break;
-            }
-
-            let message = entry.get_field("MESSAGE").unwrap_or_default();
-
-            // Regex / Text Filter
-            if let Some(ref regex) = re {
-                if !regex.is_match(&message) {
-                    continue;
-                }
-            } else if !filter.is_empty() {
-                if !message.contains(filter.as_str()) {
-                    continue;
-                }
-            }
-            if let Some(newpid) = entry.get_field("_PID") {
-                if newpid != pid {
-                    cursor.push(String::new());
-                    items.push(SEETui::format_styled_line(&entry, -1, newpid));
-                    pid = newpid.to_string();
-                }
-            }
-            if let Some(curs) = entry.get_field("__CURSOR") {
-                cursor.push(curs.to_string());
-            } else {
-                cursor.push(String::new());
-            }
-            items.push(SEETui::format_styled_line(&entry, wallclock, &message));
-        }
-        return (cursor, items);
-    }
     pub fn new(unit: String) -> Self {
-        let mut res = Self {
+        Self {
             filter: tui_input::TuiInput::new(
                 "📌Filter".to_string(),
                 "Filter for example \"service (daemon) has not started \" or regex h*o w??rld"
                     .to_string(),
             ),
             lstate: ListState::default(),
-            is_cancelled: Arc::new(AtomicBool::new(false)),
-            fetch_task: None,
             oldinputstate: InputMode::InputFilter,
             inputstate: InputMode::SelectLog,
             from: tui_input_date::TuiInputDate::new("📅from".to_string()),
             to: tui_input_date::TuiInputDate::new("📅to".to_string()),
-            unit: unit,
-            log_data: vec![],
-            cursor_map: vec![],
+            unit: unit.clone(),
+
             temp_cursor_log: JournalEntry::new(),
             tstate: ListState::default(),
             clipboard: arboard::Clipboard::new().ok(),
-        };
-        res.run_fetch();
-        res
+            reader_instance: reader_instance::ReaderInstance::new(
+                unit,
+                "".to_string(),
+                "".to_string(),
+                "".to_string(),
+            ),
+            cursor_map: vec![],
+            log_data: vec![],
+        }
     }
     pub fn reformwidgets(&mut self) -> bool {
         let mut stay_focus = true;
@@ -213,24 +133,7 @@ impl SEETui {
         }
         stay_focus
     }
-    fn run_fetch(&mut self) {
-        // 1. Snapshot: Clone strings so the future OWNS them
-        let u = self.unit.clone();
-        let f = self.filter.input.clone();
-        let from = self.from.input.clone();
-        let to = self.to.input.clone();
 
-        let is_cancelled = Arc::clone(&self.is_cancelled);
-
-        // 3. The closure now moves the CLONES, not 'self'
-        let handle = tokio::task::spawn_blocking(move || {
-            // Use the clones here. 'self' is not touched!
-            SEETui::fetch_log_data(u, f, from, to, is_cancelled)
-        });
-
-        // 4. Now 'self' is still available here!
-        self.fetch_task = Some(handle);
-    }
     fn yank(&mut self) {
         if let Some(idx) = self.tstate.selected() {
             if let Some((key, value)) = self.temp_cursor_log.fields.iter().nth(idx) {
@@ -239,7 +142,22 @@ impl SEETui {
             }
         }
     }
+    fn pull_new_journaldata(&mut self) -> bool {
+        if let Ok(mut cursor_guard) = self.reader_instance.cursor_map.try_lock()
+            && let Ok(mut logs_guard) = self.reader_instance.log_data.try_lock()
+        {
+            if logs_guard.is_empty() {
+                return false;
+            }
 
+            self.cursor_map.append(&mut *cursor_guard);
+            self.log_data.append(&mut *logs_guard);
+
+            return true;
+        }
+
+        false
+    }
     pub fn to_clipboard(&mut self, text: String) {
         if let Some(ref mut clipctx) = self.clipboard {
             // We use .ok() or handle the result to keep it silent
@@ -370,13 +288,17 @@ impl SEETui {
             || self.from.render_input(controls_chunks[1], frame, key)
             || self.to.render_input(controls_chunks[2], frame, key)
         {
-            self.is_cancelled.store(true, Ordering::SeqCst);
-
-            if let Some(task) = self.fetch_task.take() {
-                task.abort();
-            }
-            self.is_cancelled.store(false, Ordering::SeqCst);
-            self.run_fetch();
+            self.reader_instance
+                .is_cancelled
+                .store(true, Ordering::SeqCst);
+            self.cursor_map = vec![];
+            self.log_data = vec![];
+            self.reader_instance = reader_instance::ReaderInstance::new(
+                self.unit.clone(),
+                self.filter.input.clone(),
+                self.from.input.clone(),
+                self.to.input.clone(),
+            );
         };
         self.render_footer(frame, main_chunks[0]);
         if self.inputstate == InputMode::DetailedEntry {
@@ -384,10 +306,14 @@ impl SEETui {
         }
     }
     fn render_footer(&mut self, frame: &mut Frame, area: Rect) {
-        let pos = self.lstate.selected().unwrap_or(0) as f64 + 1_f64;
-        let len = self.log_data.len().max(1) as f64;
-        let ratio = pos / len;
+        let pos = self.lstate.selected().unwrap_or(0) as f64 + 1.0;
+        let len = self.log_data.len() as f64;
 
+        let ratio = if len > 0.0 {
+            (pos / len).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let line_gauge = LineGauge::default()
             .filled_style(Style::new().gray().on_gray().bold())
             .unfilled_style(Style::new().black().on_black())
@@ -409,28 +335,6 @@ impl SEETui {
         frame.render_widget(line_gauge, controls_chunks[0]);
     }
 
-    fn pull_data(&mut self) -> bool {
-        if let Some(mut task) = self.fetch_task.take() {
-            let mut cx = Context::from_waker(noop_waker_ref());
-
-            match Pin::new(&mut task).poll(&mut cx) {
-                Poll::Ready(Ok(new_items)) => {
-                    self.log_data = new_items.1;
-                    self.cursor_map = new_items.0;
-                    return true;
-                }
-                Poll::Ready(Err(e)) => {
-                    // Background thread panicked
-                    eprintln!("Task failed: {:?}", e);
-                }
-                _ => {
-                    // Background thread is still reading disk, keep UI moving!
-                    self.fetch_task = Some(task);
-                }
-            }
-        }
-        false
-    }
     fn render_detailed_entry(&mut self, frame: &mut Frame) {
         let screen_area = frame.area();
         let buffer = frame.buffer_mut();
@@ -489,7 +393,7 @@ impl SEETui {
         frame.render_stateful_widget(lszt, area, &mut self.tstate);
     }
     pub fn render_logs(&mut self, frame: &mut Frame, area: Rect) {
-        let selecte_data = self.pull_data();
+        let selecte_data = self.pull_new_journaldata();
         let cool_block = Block::default()
             .borders(Borders::ALL)
             .padding(Padding::new(0, 1, 0, 0))
@@ -522,103 +426,5 @@ impl SEETui {
             *self.lstate.offset_mut() = offset;
         }
         frame.render_stateful_widget(list, area, &mut self.lstate);
-    }
-
-    fn format_styled_line(
-        entry: &journald::JournalEntry,
-        wallclock: i64,
-        message: &str,
-    ) -> ListItem<'static> {
-        let dt = Local.timestamp_nanos(wallclock * 1000);
-        let date_str = dt.format("%m/%d/%Y").to_string();
-        let time_str = dt.format("%H:%M:%S%.3f").to_string();
-        let unit_raw = entry.get_field("_SYSTEMD_UNIT").unwrap_or("");
-        let priority = entry.get_field("PRIORITY").unwrap_or("6");
-        if wallclock == -1 {
-            let line = Line::from(vec![Span::styled(
-                format!("Started New Instance ➝ {}({})", unit_raw, message),
-                Style::default().fg(Color::Gray),
-            )]);
-
-            return ListItem::new(line.centered());
-        }
-        let display_message = if let Some(start_idx) = message.find("msg=\"") {
-            let content_start = start_idx + 5; // Skip past the 'msg="'
-            if let Some(end_offset) = message[content_start..].find('"') {
-                &message[content_start..content_start + end_offset]
-            } else {
-                message // Missing closing quote, fallback to whole message
-            }
-        } else if let Some(start_idx) = message.find("msg=") {
-            let content_start = start_idx + 4;
-            if let Some(end_offset) = message[content_start..].find(' ') {
-                &message[content_start..content_start + end_offset]
-            } else {
-                &message[content_start..]
-            }
-        } else {
-            message
-        };
-        let (level, msg_style) = match priority {
-            "0" | "1" | "2" | "3" => (
-                // Emerg, Alert, Crit, Err
-                "ERR",
-                Style::default().fg(Color::Red), // Error = Red
-            ),
-            "4" => (
-                // Warning
-                "WARN",
-                Style::default().fg(Color::Rgb(255, 165, 0)), // Warning = Orange
-            ),
-            "5" | "6" => (
-                // Notice, Info
-                "INFO",
-                Style::default().fg(Color::Cyan), // Info = Cyan
-            ),
-            "7" => (
-                // Debug
-                "DEBUG",
-                Style::default().fg(Color::Yellow), // Debug = Yellow
-            ),
-            _ => (
-                // Unknown
-                "UKNOWN",
-                Style::default().fg(Color::White), // Unknown = White
-            ),
-        };
-
-        // 3. Construct the Styled Line using Ratatui Spans
-        let line = Line::from(vec![
-            Span::styled(format!("[{}] ", level), msg_style),
-            Span::styled(date_str, Style::default().fg(Color::Indexed(170))),
-            Span::styled(format!(" {}", time_str), Style::default().fg(Color::White)),
-            // Offset in Blue/Cyan
-            // Spacing
-            Span::raw("  "),
-            // The Message styled dynamically based on the priority level
-            Span::styled(
-                display_message
-                    .replace("\t", "    ")
-                    .replace('\r', "")
-                    .to_string(),
-                msg_style,
-            ),
-        ]);
-
-        ListItem::new(line)
-    }
-
-    pub fn parse_human_time(s: &str) -> i64 {
-        if s.is_empty() {
-            return 0;
-        }
-        // Format: month/day/year hour:minute:second
-        let fmt = "%m/%d/%Y %H:%M:%S";
-
-        NaiveDateTime::parse_from_str(s, fmt)
-            .ok()
-            .and_then(|naive| Local.from_local_datetime(&naive).single())
-            .map(|dt| dt.timestamp_micros())
-            .unwrap_or(0)
     }
 }

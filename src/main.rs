@@ -1,3 +1,4 @@
+mod reader_instance;
 mod tui;
 mod tui_input;
 mod tui_input_date;
