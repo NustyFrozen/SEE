@@ -1,8 +1,8 @@
 [package]
 name = "seetui"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
-description = "TUI based tool to gather & lookup logs from services (systemd)"
+description = "TUI based tool to lookup logs from services (systemd) with Vi Motions"
 license = "AGPL-3.0"
 readme = "README.md"
 repository = "https://github.com/NustyFrozen/SEE"
@@ -19,3 +19,4 @@ regex = "1.12.3"
 futures = "0.3.32"
 clap = {version= "4.6.0",features = ["derive"]}
 arboard = "3.6.1"
+tui-tabs = "0.1"

@@ -35,6 +35,7 @@ pub(crate) struct SEETui {
     temp_cursor_log: JournalEntry,
     cursor_map: Vec<String>,
     log_data: Vec<ListItem<'static>>,
+    meta_motions: String, // meta kepress for motions
 }
 impl SEETui {
     pub const FOCUSED_COLOR: Color = Color::Rgb(121, 88, 221);
@@ -95,6 +96,7 @@ impl SEETui {
             ),
             cursor_map: vec![],
             log_data: vec![],
+            meta_motions: String::new(),
         }
     }
     pub fn reformwidgets(&mut self) -> bool {
@@ -168,7 +170,7 @@ impl SEETui {
     pub fn run_widget(&mut self, area: Rect, frame: &mut Frame, keye: Option<KeyEvent>) -> bool {
         let mut stay_focus = true;
         let mut next_input = None;
-
+        let mut keep_meta = false;
         if let Some(key) = keye {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -187,7 +189,10 @@ impl SEETui {
                 (InputMode::DetailedEntry, KeyCode::Char('y'), false) => {
                     self.yank();
                 }
-
+                (_, KeyCode::Char(c @ '0'..='9'), false) => {
+                    keep_meta = true;
+                    self.meta_motions.push(c);
+                }
                 (InputMode::DetailedEntry, KeyCode::Char('j') | KeyCode::Down, false) => {
                     self.tstate.select_next()
                 }
@@ -196,7 +201,13 @@ impl SEETui {
                 (InputMode::SelectLog, KeyCode::Enter, false) => self.select_log(),
 
                 (InputMode::SelectLog, KeyCode::Char('g'), false) => self.lstate.select_first(),
-                (InputMode::SelectLog, KeyCode::Char('G'), false) => self.lstate.select_last(),
+                (InputMode::SelectLog, KeyCode::Char('G'), false) => {
+                    if let Some(line_num) = self.meta_motions.parse::<usize>().ok() {
+                        self.lstate.select((line_num - 1_usize).into());
+                    } else {
+                        self.lstate.select_last()
+                    }
+                }
                 (InputMode::SelectLog, KeyCode::PageUp, false) => {
                     (0..10).for_each(|_| self.lstate.select_previous())
                 }
@@ -254,7 +265,9 @@ impl SEETui {
                 // --- FALLTHROUGH ---
                 _ => next_input = keye,
             }
-
+            if !keep_meta {
+                self.meta_motions.clear();
+            }
             stay_focus = self.reformwidgets();
         }
 

@@ -15,9 +15,10 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Tabs};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Widget};
 use tokio::{io, process::Command};
 use tui::{InputMode, SEETui};
+use tui_tabs::TabNav;
 
 use crate::tui_input::TuiInput;
 static SERVICES_POST_PROCESSING: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -415,24 +416,21 @@ fn render_buffer_tabs(
     let tab_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Top row for Tabs
-            Constraint::Min(0),    // Bottom area for Log widget
+            Constraint::Length(3), // Top row for Tabs
+            Constraint::Fill(1),   // Bottom area for Log widget
         ])
         .split(area);
 
     let mut buffers = get_buffers().lock().unwrap();
 
-    let tab_titles: Vec<String> = buffers
-        .iter()
-        .map(|b| format!("📝{}", b.unit.clone()))
-        .collect();
+    let tab_titles: Vec<String> = buffers.iter().map(|b| format!("📝 {}", b.unit)).collect();
 
-    let tabs = Tabs::new(tab_titles)
-        .highlight_style(Style::new().fg(SEETui::FOCUSED_COLOR).bold())
-        .select(SELECTED_BUFFER.load(Ordering::SeqCst))
-        .divider("|")
-        .padding(" ", " ");
-    frame.render_widget(tabs, tab_chunks[0]);
+    TabNav::new(
+        &tab_titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        SELECTED_BUFFER.load(Ordering::SeqCst),
+    )
+    .highlight_style(Style::new().fg(SEETui::FOCUSED_COLOR).bold())
+    .render(area, frame.buffer_mut());
 
     if let Some(buffer) = buffers.get_mut(SELECTED_BUFFER.load(Ordering::SeqCst)) {
         let mut owner = INPUT_OWNER.lock().unwrap();
