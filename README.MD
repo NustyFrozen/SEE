@@ -18,3 +18,6 @@ or
 - Enter / x Toggle / open
 - I input search, F input from date, T input to date
 y: Yank selected key=value to clipboard (only in detailed view)
+
+### contribution
+contributors (besides ai clankers) are welcome.
