@@ -112,7 +112,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pass_key = None;
             if event::poll(Duration::from_millis(10))? {
                 if let Some(key) = event::read()?.as_key_press_event() {
-                    if key.code == KeyCode::Char('q')
+                    if (key.code == KeyCode::Char('q')
+                        || key.code == KeyCode::Char('c')
+                        || key.code == KeyCode::Char('d'))
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         return Ok(());

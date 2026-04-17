@@ -20,3 +20,4 @@ futures = "0.3.32"
 clap = {version= "4.6.0",features = ["derive"]}
 arboard = "3.6.1"
 tui-tabs = "0.1"
+tui-slider = "0.3.2"

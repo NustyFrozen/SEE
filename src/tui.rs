@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, LineGauge, List, ListItem, ListState, Padding};
 use ratatui::widgets::{Clear, Paragraph};
 use std::sync::atomic::Ordering;
+use tui_slider::{Slider, SliderOrientation};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum InputMode {
@@ -327,12 +328,13 @@ impl SEETui {
         } else {
             0.0
         };
-        let line_gauge = LineGauge::default()
-            .filled_style(Style::new().gray().on_gray().bold())
-            .unfilled_style(Style::new().black().on_black())
-            .ratio(ratio)
-            .filled_symbol(" ")
-            .unfilled_symbol(" ");
+        let slider = Slider::new(pos, 0_f64, len)
+            .orientation(SliderOrientation::Horizontal)
+            .filled_symbol("─")
+            .filled_color(Color::Rgb(86, 117, 125))
+            .empty_symbol("─")
+            .handle_symbol("│")
+            .show_value(false);
         let span1 = format!("{}", pos).light_magenta();
         let span2 = format!("{}", len).magenta();
         let line = Line::from(vec![span1, "/".into(), span2]);
@@ -345,7 +347,7 @@ impl SEETui {
             ])
             .split(area);
         frame.render_widget(Paragraph::new(text), controls_chunks[1]);
-        frame.render_widget(line_gauge, controls_chunks[0]);
+        frame.render_widget(slider, controls_chunks[0]);
     }
 
     fn render_detailed_entry(&mut self, frame: &mut Frame) {
