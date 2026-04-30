@@ -1,6 +1,6 @@
 [package]
 name = "seetui"
-version = "0.1.5"
+version = "0.1.7"
 edition = "2024"
 description = "TUI based tool to lookup logs from services (systemd) with Vi Motions"
 license = "AGPL-3.0"
